@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0a0c10" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>HADIR Mobile</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- ── Status bar ────────────────────────────────────────────────────── -->
+    <div class="status-bar">
+      <span id="clock">--:--</span>
+      <span class="app-name">HADIR ◆</span>
+      <span class="signal">●●●</span>
+    </div>
+
+    <!-- ── Camera area ───────────────────────────────────────────────────── -->
+    <div class="camera-area" id="cameraArea">
+      <div class="cam-bg"></div>
+
+      <video id="video" autoplay playsinline muted></video>
+
+      <!-- Idle silhouette -->
+      <svg id="idleSvg" class="idle-svg" viewBox="0 0 120 160" preserveAspectRatio="xMidYMid meet">
+        <ellipse cx="60" cy="38" rx="28" ry="32" fill="currentColor" />
+        <path d="M10 160 Q10 100 60 100 Q110 100 110 160Z" fill="currentColor" />
+      </svg>
+
+      <!-- Face oval guide (div-based for simplicity) -->
+      <div class="face-oval" id="faceOval"></div>
+
+      <!-- Corner guides -->
+      <div class="corner-g tl"></div>
+      <div class="corner-g tr"></div>
+      <div class="corner-g bl"></div>
+      <div class="corner-g br"></div>
+
+      <!-- Scan line -->
+      <div class="scan-line" id="scanLine"></div>
+
+      <!-- Countdown ring -->
+      <div class="countdown-wrap" id="countdownWrap">
+        <div class="countdown-ring">
+          <svg viewBox="0 0 64 64" width="72" height="72">
+            <circle cx="32" cy="32" r="28" fill="none" stroke="#1e2230" stroke-width="4" />
+            <circle id="cdCircle" cx="32" cy="32" r="28" fill="none"
+              stroke="#00e5b0" stroke-width="4"
+              stroke-dasharray="175.9" stroke-dashoffset="0"
+              stroke-linecap="round" transform="rotate(-90 32 32)"
+              style="transition: stroke-dashoffset 0.9s linear" />
+          </svg>
+          <span class="countdown-num" id="cdNum">3</span>
+        </div>
+        <span class="countdown-label">Posisikan wajah dalam oval</span>
+        <span class="retry-label" id="retryLabel"></span>
+      </div>
+
+      <!-- Verifying overlay -->
+      <div class="verifying-overlay" id="verifyingOverlay">
+        <div class="spinner"></div>
+        <p>Menganalisis wajah...</p>
+      </div>
+
+      <!-- Result overlay -->
+      <div class="result-overlay" id="resultOverlay">
+        <div class="result-icon-big" id="resultIcon"></div>
+        <div class="result-name-big" id="resultName"></div>
+        <div class="result-time-big" id="resultTime"></div>
+        <div class="result-action-badge" id="resultBadge"></div>
+        <div class="result-accuracy" id="resultAccuracy"></div>
+      </div>
+    </div>
+
+    <!-- ── Bottom panel ──────────────────────────────────────────────────── -->
+    <div class="bottom-panel">
+
+      <!-- State steps -->
+      <div class="state-steps">
+        <div class="step-item">
+          <div class="step-dot" id="s1">1</div>
+          <div class="step-label">KARTU</div>
+        </div>
+        <div class="step-line" id="l1"></div>
+        <div class="step-item">
+          <div class="step-dot" id="s2">2</div>
+          <div class="step-label">KAMERA</div>
+        </div>
+        <div class="step-line" id="l2"></div>
+        <div class="step-item">
+          <div class="step-dot" id="s3">3</div>
+          <div class="step-label">VERIFIKASI</div>
+        </div>
+        <div class="step-line" id="l3"></div>
+        <div class="step-item">
+          <div class="step-dot" id="s4">4</div>
+          <div class="step-label">HASIL</div>
+        </div>
+      </div>
+
+      <!-- Idle panel (tap to scan) -->
+      <div class="idle-panel visible" id="idlePanel">
+        <!-- Hidden input captures HID reader keystrokes -->
+        <input id="cardInput" type="text" inputmode="none"
+          autocomplete="off" autocorrect="off" spellcheck="false"
+          aria-label="Scan kartu RFID" />
+        <div class="tap-icon">⬡</div>
+        <div class="tap-text">TAP / SCAN KARTU</div>
+        <button class="manual-btn" id="manualBtn">Ketik UID manual</button>
+      </div>
+
+      <!-- Manual input panel -->
+      <div class="manual-panel" id="manualPanel">
+        <input id="manualInput" type="text" class="manual-input"
+          placeholder="Masukkan UID kartu..."
+          autocomplete="off" />
+        <button class="submit-btn" id="submitBtn">Verifikasi →</button>
+        <button class="cancel-btn" id="cancelBtn">Batal</button>
+      </div>
+
+      <!-- Employee info row -->
+      <div class="info-row" id="empRow">
+        <div class="info-avatar" id="empAvatar">?</div>
+        <div class="info-details">
+          <div class="info-name" id="empName">-</div>
+          <div class="info-dept" id="empDept">-</div>
+        </div>
+        <div class="info-time" id="empTime">--:--</div>
+      </div>
+
+      <!-- Error -->
+      <div class="error-msg" id="errorMsg"></div>
+
+      <!-- Status line -->
+      <div class="status-msg" id="statusMsg">Menunggu kartu...</div>
+    </div>
+
+  </div>
+  <script type="module" src="/src/app.js"></script>
+</body>
+</html>

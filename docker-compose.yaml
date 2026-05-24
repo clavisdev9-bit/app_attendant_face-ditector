@@ -1,0 +1,73 @@
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       attendance_db
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend API ─────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:password@db:5432/attendance_db
+    ports:
+      - "8008:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ── Frontend ────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3003:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+  # ── Mobile Frontend (Vite dev server, internal only) ────────────────────────
+  mobile:
+    build:
+      context: ./frontend-mobile
+      dockerfile: Dockerfile
+    expose:
+      - "3005"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend-mobile:/app
+      - /app/node_modules
+
+  # ── Nginx reverse proxy for mobile (public entrypoint on 3004) ───────────────
+  mobile-nginx:
+    image: nginx:alpine
+    ports:
+      - "3004:80"
+    depends_on:
+      - mobile
+      - backend
+    volumes:
+      - ./frontend-mobile/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  postgres_data:
