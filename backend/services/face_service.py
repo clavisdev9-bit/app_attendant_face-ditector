@@ -19,9 +19,9 @@ except ImportError:
 
 
 class FaceService:
-    def __init__(self, tolerance: float = 0.55):
+    def __init__(self, tolerance: float = 0.50):
         """
-        tolerance: 0.4 = sangat ketat, 0.55 = normal, 0.6 = longgar
+        tolerance: 0.4 = sangat ketat, 0.50 = normal, 0.6 = longgar
         Nilai lebih rendah = lebih ketat = lebih sedikit false positive
         """
         self.tolerance = tolerance
@@ -85,6 +85,36 @@ class FaceService:
         is_match = distance < self.tolerance
 
         return is_match, float(distance)
+
+    def compare_encodings(self, live_enc: np.ndarray, stored_enc: np.ndarray) -> tuple[bool, float]:
+        """Compare pre-computed encodings. Returns (is_match, distance)."""
+        if not FACE_LIB_AVAILABLE:
+            import random
+            d = random.uniform(0.3, 0.7)
+            return d < self.tolerance, d
+        dist = float(face_recognition.face_distance([stored_enc], live_enc)[0])
+        return dist < self.tolerance, dist
+
+    def find_conflicting_employee(self, live_enc: np.ndarray, other_employees: list) -> str | None:
+        """
+        Check if live_enc matches any employee in the given list.
+        Returns the first matching employee_id, or None if no conflict.
+        """
+        if not FACE_LIB_AVAILABLE or not other_employees:
+            return None
+        entries = [
+            (emp.employee_id, np.frombuffer(emp.face_encoding, dtype=np.float64))
+            for emp in other_employees
+            if emp.face_encoding
+        ]
+        if not entries:
+            return None
+        ids, encs = zip(*entries)
+        distances = face_recognition.face_distance(list(encs), live_enc)
+        for emp_id, dist in zip(ids, distances):
+            if dist < self.tolerance:
+                return emp_id
+        return None
 
     def detect_liveness(self, frames: list[bytes]) -> bool:
         """

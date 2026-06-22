@@ -1,0 +1,48 @@
+// Core Bootstrap
+@import 'bootstrap/scss/functions';
+@import 'bootstrap/scss/variables';
+@import 'config/variables';
+@import 'config/variables-dark';
+@import 'config/variables-custom';
+@import 'config/theme-mode';
+@import 'bootstrap/scss/bootstrap';
+
+// Structure
+@import 'structure/topbar';
+@import 'structure/vertical';
+@import 'structure/page-title';
+@import 'structure/footer';
+
+// Components
+@import 'components/accordion';
+@import 'components/alerts';
+@import 'components/avatar';
+@import 'components/backgrounds';
+@import 'components/badge';
+@import 'components/breadcrumb';
+@import 'components/buttons';
+@import 'components/card';
+@import 'components/dropdown';
+@import 'components/forms';
+@import 'components/helper';
+@import 'components/list-group';
+@import 'components/modal';
+@import 'components/nav';
+@import 'components/pagination';
+@import 'components/preloader';
+@import 'components/progress';
+@import 'components/reboot';
+@import 'components/switch';
+@import 'components/tables';
+@import 'components/type';
+@import 'components/tooltip';
+@import 'components/widgets';
+
+// Plugins
+@import 'plugins/simplebar';
+@import 'plugins/apexcharts';
+@import 'plugins/toastify';
+
+// Pages
+@import 'pages/custom-react';
+@import 'pages/authentication';

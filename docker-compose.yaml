@@ -23,6 +23,10 @@ services:
       dockerfile: Dockerfile
     environment:
       DATABASE_URL: postgresql://postgres:password@db:5432/attendance_db
+      SECRET_KEY: change-me-in-production-use-random-256-bit-key
+      ACCESS_TOKEN_EXPIRE_MINUTES: "480"
+      REFRESH_TOKEN_EXPIRE_DAYS: "7"
+      UPLOAD_DIR: /uploads
     ports:
       - "8008:8000"
     depends_on:
@@ -30,6 +34,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      - uploads_data:/uploads
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
   # ── Frontend ────────────────────────────────────────────────────────────────
@@ -37,6 +42,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    environment:
+      VITE_API_URL: http://localhost:8008/api
     ports:
       - "3003:3000"
     depends_on:
@@ -71,3 +78,4 @@ services:
 
 volumes:
   postgres_data:
+  uploads_data:

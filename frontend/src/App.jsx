@@ -1,58 +1,35 @@
-import { useState } from "react";
-import Dashboard from "./pages/Dashboard";
-import ScanStation from "./pages/ScanStation";
-import Employees from "./pages/Employees";
-import Reports from "./pages/Reports";
-import "./styles/global.css";
+import { AuthProvider, useAuth } from "./context/AuthContext";
+import { LayoutProvider } from "./context/useLayoutContext";
+import Login   from "./pages/Login";
+import AppShell from "./components/AppShell";
 
-const NAV_ITEMS = [
-  { id: "dashboard", label: "Dashboard", icon: "⬡" },
-  { id: "scan",      label: "Absensi",   icon: "⬢" },
-  { id: "employees", label: "Karyawan",  icon: "◈" },
-  { id: "reports",   label: "Laporan",   icon: "◉" },
-];
+function Root() {
+  const { user, loading } = useAuth();
 
-export default function App() {
-  const [page, setPage] = useState("scan");
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-slate-100">
+        <div className="flex flex-col items-center gap-3">
+          <div className="spinner w-10 h-10 border-3" />
+          <span className="text-sm text-slate-500">Memuat sistem…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) return <Login />;
 
   return (
-    <div className="app-shell">
-      {/* Sidebar */}
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-icon">◈</div>
-          <div>
-            <div className="brand-name">HADIR</div>
-            <div className="brand-sub">Attendance System</div>
-          </div>
-        </div>
+    <LayoutProvider>
+      <AppShell />
+    </LayoutProvider>
+  );
+}
 
-        <nav className="nav">
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.id}
-              className={`nav-item ${page === item.id ? "active" : ""}`}
-              onClick={() => setPage(item.id)}
-            >
-              <span className="nav-icon">{item.icon}</span>
-              <span>{item.label}</span>
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-footer">
-          <div className="status-dot" />
-          <span>Sistem Online</span>
-        </div>
-      </aside>
-
-      {/* Main content */}
-      <main className="main-content">
-        {page === "dashboard"  && <Dashboard  onNavigate={setPage} />}
-        {page === "scan"       && <ScanStation />}
-        {page === "employees"  && <Employees />}
-        {page === "reports"    && <Reports />}
-      </main>
-    </div>
+export default function App() {
+  return (
+    <AuthProvider>
+      <Root />
+    </AuthProvider>
   );
 }

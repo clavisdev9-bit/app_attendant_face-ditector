@@ -3,7 +3,7 @@ Attendance System Backend - FastAPI
 Sistem Absensi dengan Face Detection & RFID Card
 """
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
@@ -24,13 +24,16 @@ from services.face_service import FaceService
 from services.attendance_service import AttendanceService
 import models
 
-# Create tables
+# ── New v2 routers ────────────────────────────────────────────────────────────
+from routers import auth, users, master, shifts, policies, leaves, overtime, wfh, reports
+
+# Create tables (all models registered via models.py import chain)
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Attendance System API",
     description="Sistem Absensi dengan Face Detection & RFID",
-    version="1.0.0"
+    version="2.0.0"
 )
 
 app.add_middleware(
@@ -40,6 +43,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Mount v2 routers ──────────────────────────────────────────────────────────
+app.include_router(auth.router)
+app.include_router(users.router)
+app.include_router(master.router)
+app.include_router(shifts.router)
+app.include_router(policies.router)
+app.include_router(leaves.router)
+app.include_router(overtime.router)
+app.include_router(wfh.router)
+app.include_router(reports.router)
 
 face_service = FaceService()
 attendance_service = AttendanceService()
@@ -81,6 +95,29 @@ async def enroll_face(
     if encoding is None:
         raise HTTPException(400, "Wajah tidak terdeteksi, coba foto dengan pencahayaan lebih baik")
 
+    # Check for duplicate biometric — reject if face too similar to another employee
+    try:
+        import face_recognition as fr
+        import numpy as np
+        others = db.query(Employee).filter(
+            Employee.face_enrolled == True,
+            Employee.employee_id != employee_id,
+            Employee.face_encoding != None,
+        ).all()
+        for other in others:
+            stored = np.frombuffer(other.face_encoding, dtype=np.float64)
+            dist = fr.face_distance([stored], encoding)[0]
+            if dist < face_service.tolerance:
+                raise HTTPException(
+                    400,
+                    f"Wajah ini sudah terdaftar untuk karyawan {other.employee_id} ({other.name}). "
+                    f"Setiap karyawan harus menggunakan wajah yang berbeda."
+                )
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # face_recognition not available — skip duplicate check
+
     employee.face_encoding = encoding.tobytes()
     employee.face_enrolled = True
     db.commit()
@@ -105,6 +142,53 @@ async def get_employee(employee_id: str, db=Depends(get_db)):
     if not employee:
         raise HTTPException(404, "Karyawan tidak ditemukan")
     return employee
+
+
+@app.put("/api/employees/{employee_id}", response_model=EmployeeResponse)
+def update_employee(employee_id: str, data: dict = Body(...), db=Depends(get_db)):
+    emp = db.query(Employee).filter(Employee.employee_id == employee_id).first()
+    if not emp:
+        raise HTTPException(404, "Karyawan tidak ditemukan")
+    allowed = ["name", "department", "position", "email", "phone", "card_uid",
+               "work_start", "work_end", "late_tolerance", "is_active"]
+    for k, v in data.items():
+        if k in allowed and v is not None:
+            setattr(emp, k, v)
+    db.commit()
+    db.refresh(emp)
+    return emp
+
+
+@app.delete("/api/employees/{employee_id}")
+def delete_employee(employee_id: str, db=Depends(get_db)):
+    emp = db.query(Employee).filter(Employee.employee_id == employee_id).first()
+    if not emp:
+        raise HTTPException(404, "Karyawan tidak ditemukan")
+
+    # Nullify nullable FK references pointing to this employee
+    db.query(models.User).filter(models.User.employee_id == employee_id).update(
+        {"employee_id": None}, synchronize_session=False
+    )
+    db.query(models.Department).filter(models.Department.head_employee_id == employee_id).update(
+        {"head_employee_id": None}, synchronize_session=False
+    )
+    db.query(Employee).filter(Employee.direct_manager_id == emp.id).update(
+        {"direct_manager_id": None}, synchronize_session=False
+    )
+
+    # Delete all dependent records (order respects FK constraints)
+    db.query(Attendance).filter(Attendance.employee_id == employee_id).delete(synchronize_session=False)
+    db.query(models.WFHRequest).filter(models.WFHRequest.employee_id == employee_id).delete(synchronize_session=False)
+    db.query(models.OvertimeRequest).filter(models.OvertimeRequest.employee_id == employee_id).delete(synchronize_session=False)
+    db.query(models.LeaveRequest).filter(models.LeaveRequest.employee_id == employee_id).delete(synchronize_session=False)
+    db.query(models.PermissionRequest).filter(models.PermissionRequest.employee_id == employee_id).delete(synchronize_session=False)
+    db.query(models.LeaveBalance).filter(models.LeaveBalance.employee_id == employee_id).delete(synchronize_session=False)
+    db.query(models.EmployeeSchedule).filter(models.EmployeeSchedule.employee_id == employee_id).delete(synchronize_session=False)
+    db.query(CardScan).filter(CardScan.employee_id == employee_id).delete(synchronize_session=False)
+
+    db.delete(emp)
+    db.commit()
+    return {"message": "Karyawan berhasil dihapus permanen"}
 
 
 # ─── ABSENSI ENDPOINTS ────────────────────────────────────────────────────────
@@ -146,7 +230,8 @@ async def card_scan(request: CardScanRequest, db=Depends(get_db)):
 @app.post("/api/attendance/verify-face")
 async def verify_face(request: FaceVerifyRequest, db=Depends(get_db)):
     """
-    Step 2: Verifikasi wajah → catat absensi jika cocok
+    Step 2: Verifikasi wajah → catat absensi jika cocok.
+    Includes cross-check: live face must NOT match any other enrolled employee.
     """
     employee = db.query(Employee).filter(
         Employee.employee_id == request.employee_id,
@@ -156,15 +241,23 @@ async def verify_face(request: FaceVerifyRequest, db=Depends(get_db)):
     if not employee or not employee.face_encoding:
         raise HTTPException(404, "Data karyawan tidak ditemukan")
 
-    # Decode base64 image
     try:
         image_data = base64.b64decode(request.image_base64.split(',')[-1])
     except Exception:
         raise HTTPException(400, "Format gambar tidak valid")
 
-    # Verify face
+    # Encode live face once
+    live_encoding = face_service.encode_face(image_data)
+    if live_encoding is None:
+        return {
+            "status": "MISMATCH",
+            "confidence": 1.0,
+            "message": "Wajah tidak terdeteksi, posisikan ulang di depan kamera"
+        }
+
+    # Step A: compare against the intended employee
     stored_encoding = np.frombuffer(employee.face_encoding, dtype=np.float64)
-    is_match, confidence = face_service.verify_face(image_data, stored_encoding)
+    is_match, confidence = face_service.compare_encodings(live_encoding, stored_encoding)
 
     if not is_match:
         return {
@@ -173,13 +266,34 @@ async def verify_face(request: FaceVerifyRequest, db=Depends(get_db)):
             "message": "Wajah tidak cocok, akses ditolak"
         }
 
-    # Catat absensi
+    # Step B: cross-check — live face must NOT also match another employee
+    other_employees = (
+        db.query(Employee)
+        .filter(
+            Employee.face_enrolled == True,
+            Employee.employee_id != request.employee_id,
+            Employee.face_encoding != None,
+        )
+        .all()
+    )
+    conflict_id = face_service.find_conflicting_employee(live_encoding, other_employees)
+    if conflict_id:
+        return {
+            "status": "MISMATCH",
+            "confidence": round(confidence, 3),
+            "message": (
+                f"Wajah cocok dengan lebih dari satu akun ({conflict_id}). "
+                "Hubungi admin untuk re-enroll biometrik."
+            )
+        }
+
+    # All checks passed — record attendance
     result = attendance_service.record_attendance(db, employee.employee_id)
 
     return {
         "status": "SUCCESS",
         "confidence": round(confidence, 3),
-        "action": result["action"],  # "check_in" atau "check_out"
+        "action": result["action"],
         "time": result["time"],
         "employee_name": employee.name,
         "message": f"{'Masuk' if result['action'] == 'check_in' else 'Pulang'} berhasil dicatat"

@@ -8,14 +8,62 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 import json
 
-from models import Employee, Attendance
+from models import Employee, Attendance, EmployeeSchedule, Shift, AttendancePolicy, Holiday
 
 
 class AttendanceService:
 
-    def record_attendance(self, db: Session, employee_id: str) -> dict:
+    def get_active_shift(self, db: Session, employee_id: str, target_date: date = None) -> Optional[Shift]:
+        """Dapatkan shift aktif untuk karyawan pada tanggal tertentu."""
+        target = target_date or date.today()
+        schedule = (
+            db.query(EmployeeSchedule)
+            .filter(
+                EmployeeSchedule.employee_id == employee_id,
+                EmployeeSchedule.valid_from <= target,
+                (EmployeeSchedule.valid_to == None) | (EmployeeSchedule.valid_to >= target),
+            )
+            .order_by(EmployeeSchedule.valid_from.desc())
+            .first()
+        )
+        if schedule:
+            return db.query(Shift).filter(Shift.id == schedule.shift_id, Shift.is_active == True).first()
+        return None
+
+    def get_applicable_policy(self, db: Session, employee_id: str) -> Optional[AttendancePolicy]:
+        """Dapatkan kebijakan absensi yang berlaku untuk karyawan."""
+        employee = db.query(Employee).filter(Employee.employee_id == employee_id).first()
+        if not employee:
+            return None
+        dept_id = employee.department_id
+
+        # Cari policy spesifik untuk departemen ini
+        if dept_id:
+            policies = db.query(AttendancePolicy).filter(AttendancePolicy.is_active == True).all()
+            for p in policies:
+                if p.applicable_dept_ids and dept_id in p.applicable_dept_ids:
+                    return p
+
+        # Fallback ke policy global (applicable_dept_ids = null)
+        return db.query(AttendancePolicy).filter(
+            AttendancePolicy.applicable_dept_ids == None,
+            AttendancePolicy.is_active == True
+        ).first()
+
+    def is_holiday(self, db: Session, target_date: date, dept_id: Optional[int] = None) -> bool:
+        """Cek apakah tanggal adalah hari libur."""
+        holidays = db.query(Holiday).filter(Holiday.date == target_date).all()
+        for h in holidays:
+            if h.applicable_dept_ids is None:
+                return True
+            if dept_id and dept_id in (h.applicable_dept_ids or []):
+                return True
+        return False
+
+    def record_attendance(self, db: Session, employee_id: str, method: str = "card+face") -> dict:
         """
-        Catat absensi: check-in jika belum ada, check-out jika sudah check-in hari ini
+        Catat absensi: check-in jika belum ada, check-out jika sudah check-in hari ini.
+        Menggunakan shift aktif + policy jika tersedia, fallback ke legacy work_start/end.
         """
         employee = db.query(Employee).filter(Employee.employee_id == employee_id).first()
         today = date.today()
@@ -26,26 +74,36 @@ class AttendanceService:
             Attendance.date == today
         ).first()
 
+        # Ambil shift aktif dan policy
+        shift  = self.get_active_shift(db, employee_id, today)
+        policy = self.get_applicable_policy(db, employee_id)
+
+        grace_period = (
+            shift.grace_period_minutes if shift else
+            (policy.grace_period_minutes if policy else
+             employee.late_tolerance)
+        )
+        min_work_hours = policy.min_work_hours_per_day if policy else 4.0
+
         if existing is None:
             # ── CHECK IN ─────────────────────────────────────────────────────
-            work_start = self._parse_time(employee.work_start)
-            tolerance = employee.late_tolerance  # menit
-
-            # Tentukan status
-            if now.hour < work_start.hour or (
-                now.hour == work_start.hour and
-                now.minute <= work_start.minute + tolerance
-            ):
-                status = "present"
+            if shift:
+                work_start = self._parse_time(shift.start_time)
             else:
-                status = "late"
+                work_start = self._parse_time(employee.work_start)
+
+            start_with_grace = work_start.replace(
+                minute=min(work_start.minute + grace_period, 59)
+            )
+            status = "present" if now <= start_with_grace else "late"
 
             record = Attendance(
                 employee_id=employee_id,
                 date=today,
                 check_in=now,
                 status=status,
-                method="card+face"
+                method=method,
+                attendance_type=employee.attendance_type or "onsite",
             )
             db.add(record)
             db.commit()
@@ -60,11 +118,9 @@ class AttendanceService:
         elif existing.check_out is None:
             # ── CHECK OUT ────────────────────────────────────────────────────
             existing.check_out = now
-            work_end = self._parse_time(employee.work_end)
-
-            # Update status ke half_day jika pulang terlalu cepat
             duration = now - existing.check_in
-            if duration.total_seconds() < 4 * 3600:  # kurang dari 4 jam
+
+            if duration.total_seconds() < min_work_hours * 3600:
                 existing.status = "half_day"
 
             db.commit()
@@ -75,12 +131,36 @@ class AttendanceService:
             }
 
         else:
-            # Sudah check-in dan check-out hari ini
             return {
                 "action": "already_out",
                 "time": existing.check_out.strftime("%H:%M:%S"),
                 "message": "Sudah absen pulang hari ini"
             }
+
+    def calculate_overtime(self, db: Session, employee_id: str, target_date: date) -> Optional[int]:
+        """
+        Hitung menit overtime: selisih check_out vs shift end time.
+        Returns None jika belum check-out atau tidak ada shift.
+        """
+        record = db.query(Attendance).filter(
+            Attendance.employee_id == employee_id,
+            Attendance.date == target_date,
+        ).first()
+        if not record or not record.check_out:
+            return None
+
+        shift = self.get_active_shift(db, employee_id, target_date)
+        if not shift:
+            return None
+
+        shift_end = self._parse_time(shift.end_time).replace(
+            year=record.check_out.year,
+            month=record.check_out.month,
+            day=record.check_out.day,
+        )
+        if record.check_out > shift_end:
+            return int((record.check_out - shift_end).total_seconds() / 60)
+        return 0
 
     def get_stats(self, db: Session, start_date: Optional[str], end_date: Optional[str]) -> dict:
         """Statistik absensi"""

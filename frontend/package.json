@@ -4,18 +4,32 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev":     "vite",
-    "build":   "vite build",
+    "dev": "vite",
+    "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "react":              "^18.3.1",
-    "react-dom":          "^18.3.1",
-    "recharts":           "^2.12.7",
-    "xlsx":               "^0.18.5"
+    "@iconify/react": "^6.0.2",
+    "@tailwindcss/forms": "^0.5.9",
+    "apexcharts": "^5.13.0",
+    "bootstrap": "^5.3.8",
+    "clsx": "^2.1.1",
+    "react": "^18.3.1",
+    "react-apexcharts": "^2.1.0",
+    "react-bootstrap": "^2.10.10",
+    "react-dom": "^18.3.1",
+    "react-helmet-async": "^3.0.0",
+    "react-toastify": "^11.1.0",
+    "recharts": "^2.12.7",
+    "sass": "^1.100.0",
+    "simplebar-react": "^3.3.2",
+    "tailwindcss": "^3.4.17",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
-    "vite":                 "^5.3.4"
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.3",
+    "vite": "^5.3.4"
   }
 }
