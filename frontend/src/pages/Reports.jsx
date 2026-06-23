@@ -1,15 +1,16 @@
-import { useState } from 'react';
-import { attendanceApi, reportsApi } from '../utils/api';
+import { useState, useEffect } from 'react';
+import { attendanceApi, reportsApi, masterApi } from '../utils/api';
 import * as XLSX from 'xlsx';
 import IconifyIcon from '../components/wrappers/IconifyIcon';
 import Badge from '../components/ui/Badge';
 
 const TABS = [
-  { id: 'attendance', label: 'Kehadiran' },
-  { id: 'department', label: 'Departemen' },
-  { id: 'leave',      label: 'Cuti' },
-  { id: 'overtime',   label: 'Lembur' },
-  { id: 'payroll',    label: 'Payroll' },
+  { id: 'attendance',   label: 'Kehadiran' },
+  { id: 'department',   label: 'Departemen' },
+  { id: 'leave',        label: 'Cuti' },
+  { id: 'overtime',     label: 'Lembur' },
+  { id: 'payroll',      label: 'Payroll' },
+  { id: 'rekap',        label: 'Rekap Bulanan' },
 ];
 
 const STATUS_LABELS = {
@@ -21,9 +22,23 @@ const STATUS_LABELS = {
 
 const STATUS_VARIANT = { present: 'success', late: 'warning', absent: 'danger', half_day: 'info' };
 
+const CODE_COLOR = {
+  H: 'text-green-600 dark:text-green-400',
+  S: 'text-amber-600 dark:text-amber-400',
+  I: 'text-blue-600 dark:text-blue-400',
+  A: 'text-red-600 dark:text-red-400',
+  L: 'text-slate-400 dark:text-slate-500',
+};
+
+const MONTH_NAMES_ID = [
+  '', 'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
+];
+
 export default function Reports() {
   const today    = new Date().toISOString().split('T')[0];
   const thisYear = new Date().getFullYear();
+  const thisMonth = new Date().getMonth() + 1;
 
   const [activeTab,    setActiveTab]    = useState('attendance');
   const [startDate,    setStartDate]    = useState(today);
@@ -35,6 +50,18 @@ export default function Reports() {
   const [leaveData,    setLeaveData]    = useState(null);
   const [otData,       setOtData]       = useState(null);
   const [payrollData,  setPayrollData]  = useState(null);
+
+  // Rekap bulanan state
+  const [locations,      setLocations]      = useState([]);
+  const [rekapLocationId, setRekapLocationId] = useState('');
+  const [rekapYear,      setRekapYear]      = useState(thisYear);
+  const [rekapMonth,     setRekapMonth]     = useState(thisMonth);
+  const [rekapData,      setRekapData]      = useState(null);
+  const [rekapLoading,   setRekapLoading]   = useState(false);
+
+  useEffect(() => {
+    masterApi.listLocations().then(setLocations).catch(() => {});
+  }, []);
 
   const handleLoad = async () => {
     if (!startDate || !endDate) return;
@@ -56,6 +83,18 @@ export default function Reports() {
       if (activeTab === 'attendance') setData(DEMO_DATA);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleLoadRekap = async () => {
+    setRekapLoading(true);
+    setError(null);
+    try {
+      setRekapData(await reportsApi.rekapBulanan(rekapLocationId || null, rekapYear, rekapMonth));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setRekapLoading(false);
     }
   };
 
@@ -99,6 +138,56 @@ export default function Reports() {
     XLSX.writeFile(wb, `Laporan_${startDate}_${endDate}.xlsx`);
   };
 
+  const handleExportRekap = () => {
+    if (!rekapData) return;
+
+    const { location_name, month_name, year, month, days_in_month, employees } = rekapData;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([]);
+
+    // Row 0: Title
+    XLSX.utils.sheet_add_aoa(ws, [[`ABSENSI KARYAWAN - LOKASI ${location_name.toUpperCase()}`]], { origin: 'A1' });
+    // Row 1: Bulan
+    XLSX.utils.sheet_add_aoa(ws, [[`BULAN : ${month_name} ${year}`]], { origin: 'A2' });
+    // Row 2: Column headers
+    const headerRow = ['NO', 'NIK', 'NAMA KARYAWAN', 'TANGGAL', ...Array(days_in_month - 1).fill(''), 'KET', '', '', ''];
+    XLSX.utils.sheet_add_aoa(ws, [headerRow], { origin: 'A3' });
+    // Row 3: Date numbers + summary labels
+    const dateRow = ['', '', '', ...Array.from({ length: days_in_month }, (_, i) => i + 1), 'H', 'S', 'I', 'A'];
+    XLSX.utils.sheet_add_aoa(ws, [dateRow], { origin: 'A4' });
+    // Data rows
+    employees.forEach((emp, i) => {
+      const daily = Array.from({ length: days_in_month }, (_, d) => emp.daily[String(d + 1)] || '');
+      const row = [emp.no, emp.nik, emp.nama, ...daily, emp.summary.H, emp.summary.S, emp.summary.I, emp.summary.A];
+      XLSX.utils.sheet_add_aoa(ws, [row], { origin: `A${5 + i}` });
+    });
+
+    // Merge title and bulan rows across all columns
+    const totalCols = 3 + days_in_month + 4; // NO+NIK+NAMA + days + H+S+I+A
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: totalCols - 1 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: totalCols - 1 } },
+      // Merge "TANGGAL" across date columns
+      { s: { r: 2, c: 3 }, e: { r: 2, c: 3 + days_in_month - 1 } },
+      // Merge "KET" across summary columns
+      { s: { r: 2, c: 3 + days_in_month }, e: { r: 2, c: 3 + days_in_month + 3 } },
+    ];
+
+    // Column widths
+    ws['!cols'] = [
+      { wch: 5 }, { wch: 14 }, { wch: 22 },
+      ...Array(days_in_month).fill({ wch: 4 }),
+      { wch: 5 }, { wch: 5 }, { wch: 5 }, { wch: 5 },
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Rekap Bulanan');
+
+    const locSlug = location_name.toLowerCase().replace(/\s+/g, '-');
+    const now = new Date();
+    const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
+    XLSX.writeFile(wb, `rekap_bulan_${month_name.toLowerCase()}_${year}_lokasi_${locSlug}_${ts}.xlsx`);
+  };
+
   const buildSummary = (rows) => {
     const byEmp = {};
     rows.forEach((r) => {
@@ -127,6 +216,7 @@ export default function Reports() {
   } : null;
 
   const hasData = data?.length || deptData?.length || leaveData?.length || otData?.length || payrollData?.length;
+  const isRekap = activeTab === 'rekap';
 
   return (
     <div className="space-y-6">
@@ -136,12 +226,20 @@ export default function Reports() {
           <h1 className="page-title">Laporan</h1>
           <p className="page-sub">Filter, analisis, dan export data kehadiran, cuti &amp; lembur</p>
         </div>
-        {hasData && (
-          <button className="btn-primary self-start sm:self-auto" onClick={handleExportExcel}>
-            <IconifyIcon icon="bx:download" className="text-base" />
-            Export Excel
-          </button>
-        )}
+        <div className="flex gap-2 self-start sm:self-auto">
+          {hasData && !isRekap && (
+            <button className="btn-primary" onClick={handleExportExcel}>
+              <IconifyIcon icon="bx:download" className="text-base" />
+              Export Excel
+            </button>
+          )}
+          {isRekap && rekapData && (
+            <button className="btn-primary" onClick={handleExportRekap}>
+              <IconifyIcon icon="bx:download" className="text-base" />
+              Export Rekap
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Tabs */}
@@ -157,32 +255,72 @@ export default function Reports() {
         ))}
       </div>
 
-      {/* Filter panel */}
-      <div className="card">
-        <div className="card-header">
-          <h3 className="card-title">Filter Tanggal</h3>
-        </div>
-        <div className="p-5">
-          <div className="flex flex-wrap gap-4 items-end">
-            <div>
-              <label className="input-label">Dari Tanggal</label>
-              <input type="date" className="input" value={startDate} max={endDate} onChange={(e) => setStartDate(e.target.value)} />
+      {/* Filter panel — rekap */}
+      {isRekap ? (
+        <div className="card">
+          <div className="card-header">
+            <h3 className="card-title">Filter Rekap Bulanan</h3>
+          </div>
+          <div className="p-5">
+            <div className="flex flex-wrap gap-4 items-end">
+              <div>
+                <label className="input-label">Lokasi</label>
+                <select className="input" value={rekapLocationId} onChange={(e) => setRekapLocationId(e.target.value)}>
+                  <option value="">Semua Lokasi</option>
+                  {locations.map((loc) => (
+                    <option key={loc.id} value={loc.id}>{loc.location_name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="input-label">Bulan</label>
+                <select className="input" value={rekapMonth} onChange={(e) => setRekapMonth(Number(e.target.value))}>
+                  {MONTH_NAMES_ID.slice(1).map((name, i) => (
+                    <option key={i + 1} value={i + 1}>{name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="input-label">Tahun</label>
+                <input type="number" className="input w-28" value={rekapYear} min={2020} max={2099}
+                  onChange={(e) => setRekapYear(Number(e.target.value))} />
+              </div>
+              <button className="btn-primary" onClick={handleLoadRekap} disabled={rekapLoading}>
+                {rekapLoading
+                  ? <><span className="spinner w-4 h-4" /> Memuat…</>
+                  : <><IconifyIcon icon="bx:search" className="text-base" /> Tampilkan</>}
+              </button>
             </div>
-            <div>
-              <label className="input-label">Sampai Tanggal</label>
-              <input type="date" className="input" value={endDate} min={startDate} max={today} onChange={(e) => setEndDate(e.target.value)} />
-            </div>
-            <div className="flex gap-2">
-              {[{ label: 'Hari ini', days: 1 }, { label: '7 hari', days: 7 }, { label: '30 hari', days: 30 }].map(({ label, days }) => (
-                <button key={days} className="btn-outline btn-sm" onClick={() => setPreset(days)}>{label}</button>
-              ))}
-            </div>
-            <button className="btn-primary" onClick={handleLoad} disabled={loading}>
-              {loading ? <><span className="spinner w-4 h-4" /> Memuat…</> : <><IconifyIcon icon="bx:search" className="text-base" /> Tampilkan</>}
-            </button>
           </div>
         </div>
-      </div>
+      ) : (
+        /* Filter panel — date range */
+        <div className="card">
+          <div className="card-header">
+            <h3 className="card-title">Filter Tanggal</h3>
+          </div>
+          <div className="p-5">
+            <div className="flex flex-wrap gap-4 items-end">
+              <div>
+                <label className="input-label">Dari Tanggal</label>
+                <input type="date" className="input" value={startDate} max={endDate} onChange={(e) => setStartDate(e.target.value)} />
+              </div>
+              <div>
+                <label className="input-label">Sampai Tanggal</label>
+                <input type="date" className="input" value={endDate} min={startDate} max={today} onChange={(e) => setEndDate(e.target.value)} />
+              </div>
+              <div className="flex gap-2">
+                {[{ label: 'Hari ini', days: 1 }, { label: '7 hari', days: 7 }, { label: '30 hari', days: 30 }].map(({ label, days }) => (
+                  <button key={days} className="btn-outline btn-sm" onClick={() => setPreset(days)}>{label}</button>
+                ))}
+              </div>
+              <button className="btn-primary" onClick={handleLoad} disabled={loading}>
+                {loading ? <><span className="spinner w-4 h-4" /> Memuat…</> : <><IconifyIcon icon="bx:search" className="text-base" /> Tampilkan</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {error && !data && (
         <div className="alert-warning text-sm">
@@ -391,12 +529,75 @@ export default function Reports() {
         </div>
       )}
 
-      {!hasData && !loading && (
+      {/* Rekap Bulanan tab */}
+      {activeTab === 'rekap' && rekapData && (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <h3 className="card-title">
+                Rekap Absensi — {rekapData.location_name}
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                {rekapData.month_name} {rekapData.year} &middot; {rekapData.employees.length} karyawan
+              </p>
+            </div>
+          </div>
+          {/* Legend */}
+          <div className="px-5 pt-3 pb-1 flex gap-4 text-xs">
+            {[['H','Hadir'],['S','Sakit'],['I','Izin'],['A','Absen'],['L','Libur']].map(([code, label]) => (
+              <span key={code} className={`font-semibold ${CODE_COLOR[code]}`}>{code} = {label}</span>
+            ))}
+          </div>
+          <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
+            <table className="text-xs border-collapse w-full">
+              <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-slate-800">
+                <tr>
+                  <th className="px-2 py-2 border border-slate-200 dark:border-slate-700 text-left w-8">No</th>
+                  <th className="px-2 py-2 border border-slate-200 dark:border-slate-700 text-left w-28">NIK</th>
+                  <th className="px-2 py-2 border border-slate-200 dark:border-slate-700 text-left min-w-[140px]">Nama Karyawan</th>
+                  {Array.from({ length: rekapData.days_in_month }, (_, i) => (
+                    <th key={i+1} className="px-1 py-2 border border-slate-200 dark:border-slate-700 text-center w-7 font-mono">{i+1}</th>
+                  ))}
+                  <th className="px-1 py-2 border border-slate-200 dark:border-slate-700 text-center w-7 text-green-600">H</th>
+                  <th className="px-1 py-2 border border-slate-200 dark:border-slate-700 text-center w-7 text-amber-600">S</th>
+                  <th className="px-1 py-2 border border-slate-200 dark:border-slate-700 text-center w-7 text-blue-600">I</th>
+                  <th className="px-1 py-2 border border-slate-200 dark:border-slate-700 text-center w-7 text-red-600">A</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rekapData.employees.map((emp) => (
+                  <tr key={emp.nik} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                    <td className="px-2 py-1 border border-slate-200 dark:border-slate-700 text-center">{emp.no}</td>
+                    <td className="px-2 py-1 border border-slate-200 dark:border-slate-700 font-mono">{emp.nik}</td>
+                    <td className="px-2 py-1 border border-slate-200 dark:border-slate-700 font-semibold">{emp.nama}</td>
+                    {Array.from({ length: rekapData.days_in_month }, (_, i) => {
+                      const code = emp.daily[String(i+1)] || '';
+                      return (
+                        <td key={i+1} className={`px-1 py-1 border border-slate-200 dark:border-slate-700 text-center font-bold ${CODE_COLOR[code] || ''}`}>
+                          {code}
+                        </td>
+                      );
+                    })}
+                    <td className="px-1 py-1 border border-slate-200 dark:border-slate-700 text-center font-bold text-green-600">{emp.summary.H}</td>
+                    <td className="px-1 py-1 border border-slate-200 dark:border-slate-700 text-center font-bold text-amber-600">{emp.summary.S}</td>
+                    <td className="px-1 py-1 border border-slate-200 dark:border-slate-700 text-center font-bold text-blue-600">{emp.summary.I}</td>
+                    <td className="px-1 py-1 border border-slate-200 dark:border-slate-700 text-center font-bold text-red-600">{emp.summary.A}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {!hasData && !rekapData && !loading && !rekapLoading && (
         <div className="card">
           <div className="empty-state py-16">
             <IconifyIcon icon="bx:bar-chart-alt-2" className="empty-icon" />
             <p className="empty-title">Belum ada data</p>
-            <p className="empty-sub">Pilih rentang tanggal dan klik Tampilkan</p>
+            <p className="empty-sub">
+              {isRekap ? 'Pilih lokasi, bulan, tahun lalu klik Tampilkan' : 'Pilih rentang tanggal dan klik Tampilkan'}
+            </p>
           </div>
         </div>
       )}

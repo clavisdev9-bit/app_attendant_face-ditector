@@ -3,8 +3,10 @@
  * Semua komunikasi dengan backend FastAPI
  */
 
-const BASE_URL  = import.meta.env.VITE_API_URL  || "http://localhost:8000/api";
-const BASE_V2   = BASE_URL.replace(/\/api$/, "") + "/api/v2";
+const BASE_URL = import.meta.env.VITE_API_URL || "/api";
+const BASE_V2  = import.meta.env.VITE_API_URL
+  ? import.meta.env.VITE_API_URL.replace(/\/api$/, "") + "/api/v2"
+  : "/api/v2";
 
 function getAuthHeader() {
   const token = localStorage.getItem("access_token");
@@ -254,4 +256,7 @@ export const reportsApi = {
 
   payrollExport: (start, end) =>
     requestV2(`/reports/payroll-export?start_date=${start}&end_date=${end}`),
+
+  rekapBulanan: (locationId, year, month) =>
+    requestV2(`/reports/rekap-bulanan?year=${year}&month=${month}${locationId ? `&location_id=${locationId}` : ""}`),
 };

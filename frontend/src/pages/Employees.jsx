@@ -7,6 +7,11 @@ import Badge from '../components/ui/Badge';
 
 const DEPARTMENTS = ['Engineering', 'Marketing', 'HR', 'Finance', 'Operations', 'Sales', 'IT', 'Legal'];
 
+function isNetworkError(e) {
+  const msg = e?.message || '';
+  return msg === 'Failed to fetch' || msg.includes('fetch') || msg.includes('NetworkError');
+}
+
 const EMPTY_FORM = {
   employee_id: '', name: '', department: '', position: '',
   email: '', phone: '', card_uid: '',
@@ -27,6 +32,7 @@ export default function Employees() {
   const [saving,       setSaving]       = useState(false);
   const [error,        setError]        = useState(null);
   const [editError,    setEditError]    = useState(null);
+  const [backendDown,  setBackendDown]  = useState(false);
   const [search,       setSearch]       = useState('');
   const [deptFilter,   setDeptFilter]   = useState('');
   const [rfidReading,  setRfidReading]  = useState(false);
@@ -60,8 +66,14 @@ export default function Employees() {
     try {
       const data = await employeeApi.list(deptFilter || undefined);
       setEmployees(data);
-    } catch {
-      setEmployees(DEMO_EMPLOYEES);
+      setBackendDown(false);
+    } catch (e) {
+      if (isNetworkError(e)) {
+        setBackendDown(true);
+        setEmployees(DEMO_EMPLOYEES);
+      } else {
+        console.error(e);
+      }
     } finally {
       setLoading(false);
     }
@@ -79,7 +91,11 @@ export default function Employees() {
       stopRfid();
       load();
     } catch (e) {
-      setError(e.message);
+      if (isNetworkError(e)) {
+        setError('Tidak dapat terhubung ke server. Pastikan backend berjalan.');
+      } else {
+        setError(e.message);
+      }
     } finally {
       setSaving(false);
     }
@@ -111,7 +127,11 @@ export default function Employees() {
       setEditItem(null);
       load();
     } catch (e) {
-      setEditError(e.message);
+      if (isNetworkError(e)) {
+        setEditError('Tidak dapat terhubung ke server. Pastikan backend berjalan.');
+      } else {
+        setEditError(e.message);
+      }
     } finally {
       setSaving(false);
     }
@@ -149,6 +169,14 @@ export default function Employees() {
           </button>
         )}
       </div>
+
+      {/* Backend down banner */}
+      {backendDown && (
+        <div className="alert-danger text-sm">
+          <IconifyIcon icon="bx:wifi-off" className="text-base flex-shrink-0" />
+          <span>Server tidak dapat dijangkau. Pastikan backend berjalan di <code>http://localhost:8000</code>. Data yang ditampilkan adalah data contoh.</span>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3">

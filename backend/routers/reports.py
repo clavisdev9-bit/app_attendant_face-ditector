@@ -9,9 +9,16 @@ from typing import Optional, List
 from datetime import date, timedelta
 import io
 
+import calendar
+
 from database import get_db
-from models import Employee, Attendance, Department, LeaveRequest, LeaveBalance, LeaveType, OvertimeRequest
+from models import Employee, Attendance, Department, LeaveRequest, LeaveBalance, LeaveType, OvertimeRequest, WorkLocation
 from services.auth_service import require_permission
+
+MONTH_NAMES_ID = [
+    "", "JANUARI", "FEBRUARI", "MARET", "APRIL", "MEI", "JUNI",
+    "JULI", "AGUSTUS", "SEPTEMBER", "OKTOBER", "NOVEMBER", "DESEMBER",
+]
 
 router = APIRouter(prefix="/api/v2/reports", tags=["Reports"])
 
@@ -104,6 +111,103 @@ def leave_summary(
         })
 
     return list(result.values())
+
+
+@router.get("/rekap-bulanan",
+            dependencies=[Depends(require_permission("report:all"))])
+def rekap_bulanan(
+    year:        int,
+    month:       int,
+    location_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """Grid kehadiran bulanan per karyawan. location_id opsional — tanpa filter = semua karyawan aktif."""
+    if location_id:
+        location = db.query(WorkLocation).filter(WorkLocation.id == location_id).first()
+        if not location:
+            raise HTTPException(404, "Lokasi tidak ditemukan")
+        location_name = location.location_name
+    else:
+        location_name = "Semua Lokasi"
+
+    days_in_month = calendar.monthrange(year, month)[1]
+    start = date(year, month, 1)
+    end   = date(year, month, days_in_month)
+
+    emp_query = db.query(Employee).filter(Employee.is_active == True)
+    if location_id:
+        emp_query = emp_query.filter(Employee.location_id == location_id)
+    employees = emp_query.order_by(Employee.name).all()
+
+    emp_ids = [e.employee_id for e in employees]
+
+    att_records = (
+        db.query(Attendance)
+        .filter(Attendance.employee_id.in_(emp_ids), Attendance.date >= start, Attendance.date <= end)
+        .all()
+    )
+    att_map = {(r.employee_id, r.date): r.status for r in att_records}
+
+    leave_requests = (
+        db.query(LeaveRequest, LeaveType.leave_code)
+        .join(LeaveType, LeaveRequest.leave_type_id == LeaveType.id)
+        .filter(
+            LeaveRequest.employee_id.in_(emp_ids),
+            LeaveRequest.start_date <= end,
+            LeaveRequest.end_date >= start,
+            LeaveRequest.status == "approved",
+        )
+        .all()
+    )
+    leave_map = {}
+    for lr, lcode in leave_requests:
+        d = lr.start_date
+        while d <= lr.end_date:
+            if start <= d <= end:
+                leave_map[(lr.employee_id, d)] = lcode
+            d += timedelta(days=1)
+
+    result_employees = []
+    for idx, emp in enumerate(employees):
+        daily = {}
+        summary = {"H": 0, "S": 0, "I": 0, "A": 0, "L": 0}
+
+        for day in range(1, days_in_month + 1):
+            d = date(year, month, day)
+            att_status = att_map.get((emp.employee_id, d))
+
+            if att_status in ("present", "late", "half_day"):
+                code = "H"
+            elif att_status == "absent":
+                code = "A"
+            elif att_status == "leave":
+                lcode = leave_map.get((emp.employee_id, d), "")
+                code = "S" if "sakit" in lcode.lower() or "sick" in lcode.lower() else "I"
+            elif d.weekday() >= 5:
+                code = "L"
+            else:
+                code = "A"
+
+            daily[str(day)] = code
+            summary[code] += 1
+
+        result_employees.append({
+            "no":      idx + 1,
+            "nik":     emp.employee_id,
+            "nama":    emp.name,
+            "daily":   daily,
+            "summary": summary,
+        })
+
+    return {
+        "location_id":   location_id,
+        "location_name": location_name,
+        "year":          year,
+        "month":         month,
+        "month_name":    MONTH_NAMES_ID[month],
+        "days_in_month": days_in_month,
+        "employees":     result_employees,
+    }
 
 
 @router.get("/overtime-summary",

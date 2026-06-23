@@ -4,6 +4,7 @@ Sistem Absensi dengan Face Detection & RFID Card
 """
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Body
+from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
@@ -39,7 +40,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -101,6 +102,7 @@ async def enroll_face(
         import numpy as np
         others = db.query(Employee).filter(
             Employee.face_enrolled == True,
+            Employee.is_active == True,
             Employee.employee_id != employee_id,
             Employee.face_encoding != None,
         ).all()
@@ -177,6 +179,14 @@ def delete_employee(employee_id: str, db=Depends(get_db)):
     )
 
     # Delete all dependent records (order respects FK constraints)
+    # contractor_payroll — tabel dari contractor module (mungkin belum ada jika migrasi belum dijalankan)
+    # Pakai savepoint agar kegagalan di sini tidak membatalkan seluruh transaksi
+    sp = db.begin_nested()
+    try:
+        db.execute(text("DELETE FROM contractor_payroll WHERE employee_id = :eid"), {"eid": employee_id})
+        sp.commit()
+    except Exception:
+        sp.rollback()
     db.query(Attendance).filter(Attendance.employee_id == employee_id).delete(synchronize_session=False)
     db.query(models.WFHRequest).filter(models.WFHRequest.employee_id == employee_id).delete(synchronize_session=False)
     db.query(models.OvertimeRequest).filter(models.OvertimeRequest.employee_id == employee_id).delete(synchronize_session=False)
@@ -271,6 +281,7 @@ async def verify_face(request: FaceVerifyRequest, db=Depends(get_db)):
         db.query(Employee)
         .filter(
             Employee.face_enrolled == True,
+            Employee.is_active == True,
             Employee.employee_id != request.employee_id,
             Employee.face_encoding != None,
         )
